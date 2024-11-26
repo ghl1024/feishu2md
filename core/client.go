@@ -10,23 +10,24 @@ import (
 	"time"
 
 	"github.com/chyroc/lark"
+	"github.com/chyroc/lark_rate_limiter"
 )
 
 type Client struct {
 	larkClient *lark.Lark
 }
 
-func NewClient(appID, appSecret, domain string) *Client {
+func NewClient(appID, appSecret string) *Client {
 	return &Client{
 		larkClient: lark.New(
 			lark.WithAppCredential(appID, appSecret),
-			lark.WithOpenBaseURL("https://open."+domain),
 			lark.WithTimeout(60*time.Second),
+			lark.WithApiMiddleware(lark_rate_limiter.Wait(4, 4)),
 		),
 	}
 }
 
-func (c *Client) DownloadImage(ctx context.Context, imgToken, imgDir string) (string, error) {
+func (c *Client) DownloadImage(ctx context.Context, imgToken, outDir string) (string, error) {
 	resp, _, err := c.larkClient.Drive.DownloadDriveMedia(ctx, &lark.DownloadDriveMediaReq{
 		FileToken: imgToken,
 	})
@@ -34,7 +35,7 @@ func (c *Client) DownloadImage(ctx context.Context, imgToken, imgDir string) (st
 		return imgToken, err
 	}
 	fileext := filepath.Ext(resp.Filename)
-	filename := fmt.Sprintf("%s/%s%s", imgDir, imgToken, fileext)
+	filename := fmt.Sprintf("%s/%s%s", outDir, imgToken, fileext)
 	err = os.MkdirAll(filepath.Dir(filename), 0o755)
 	if err != nil {
 		return imgToken, err
@@ -104,4 +105,72 @@ func (c *Client) GetWikiNodeInfo(ctx context.Context, token string) (*lark.GetWi
 		return nil, err
 	}
 	return resp.Node, nil
+}
+
+func (c *Client) GetDriveFolderFileList(ctx context.Context, pageToken *string, folderToken *string) ([]*lark.GetDriveFileListRespFile, error) {
+	resp, _, err := c.larkClient.Drive.GetDriveFileList(ctx, &lark.GetDriveFileListReq{
+		PageSize:    nil,
+		PageToken:   pageToken,
+		FolderToken: folderToken,
+	})
+	if err != nil {
+		return nil, err
+	}
+	files := resp.Files
+	for resp.HasMore {
+		resp, _, err = c.larkClient.Drive.GetDriveFileList(ctx, &lark.GetDriveFileListReq{
+			PageSize:    nil,
+			PageToken:   &resp.NextPageToken,
+			FolderToken: folderToken,
+		})
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, resp.Files...)
+	}
+	return files, nil
+}
+
+func (c *Client) GetWikiName(ctx context.Context, spaceID string) (string, error) {
+	resp, _, err := c.larkClient.Drive.GetWikiSpace(ctx, &lark.GetWikiSpaceReq{
+		SpaceID: spaceID,
+	})
+
+	if err != nil {
+		return "", err
+	}
+
+	return resp.Space.Name, nil
+}
+
+func (c *Client) GetWikiNodeList(ctx context.Context, spaceID string, parentNodeToken *string) ([]*lark.GetWikiNodeListRespItem, error) {
+	resp, _, err := c.larkClient.Drive.GetWikiNodeList(ctx, &lark.GetWikiNodeListReq{
+		SpaceID:         spaceID,
+		PageSize:        nil,
+		PageToken:       nil,
+		ParentNodeToken: parentNodeToken,
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	nodes := resp.Items
+
+	for resp.HasMore {
+		resp, _, err := c.larkClient.Drive.GetWikiNodeList(ctx, &lark.GetWikiNodeListReq{
+			SpaceID:         spaceID,
+			PageSize:        nil,
+			PageToken:       &resp.PageToken,
+			ParentNodeToken: parentNodeToken,
+		})
+
+		if err != nil {
+			return nil, err
+		}
+
+		nodes = append(nodes, resp.Items...)
+	}
+
+	return nodes, nil
 }

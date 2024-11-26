@@ -1,8 +1,8 @@
 package core
 
 import (
-	"context"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/Wsine/feishu2md/utils"
@@ -11,16 +11,16 @@ import (
 )
 
 type Parser struct {
-	ctx       context.Context
-	ImgTokens []string
-	blockMap  map[string]*lark.DocxBlock
+	useHTMLTags bool
+	ImgTokens   []string
+	blockMap    map[string]*lark.DocxBlock
 }
 
-func NewParser(ctx context.Context) *Parser {
+func NewParser(config OutputConfig) *Parser {
 	return &Parser{
-		ctx:       ctx,
-		ImgTokens: make([]string, 0),
-		blockMap:  make(map[string]*lark.DocxBlock),
+		useHTMLTags: config.UseHTMLTags,
+		ImgTokens:   make([]string, 0),
+		blockMap:    make(map[string]*lark.DocxBlock),
 	}
 }
 
@@ -133,33 +133,26 @@ func (p *Parser) ParseDocxBlock(b *lark.DocxBlock, indentLevel int) string {
 		buf.WriteString(p.ParseDocxBlockPage(b))
 	case lark.DocxBlockTypeText:
 		buf.WriteString(p.ParseDocxBlockText(b.Text))
+	case lark.DocxBlockTypeCallout:
+		buf.WriteString(p.ParseDocxBlockCallout(b))
 	case lark.DocxBlockTypeHeading1:
-		buf.WriteString("# ")
-		buf.WriteString(p.ParseDocxBlockText(b.Heading1))
+		buf.WriteString(p.ParseDocxBlockHeading(b, 1))
 	case lark.DocxBlockTypeHeading2:
-		buf.WriteString("## ")
-		buf.WriteString(p.ParseDocxBlockText(b.Heading2))
+		buf.WriteString(p.ParseDocxBlockHeading(b, 2))
 	case lark.DocxBlockTypeHeading3:
-		buf.WriteString("### ")
-		buf.WriteString(p.ParseDocxBlockText(b.Heading3))
+		buf.WriteString(p.ParseDocxBlockHeading(b, 3))
 	case lark.DocxBlockTypeHeading4:
-		buf.WriteString("#### ")
-		buf.WriteString(p.ParseDocxBlockText(b.Heading4))
+		buf.WriteString(p.ParseDocxBlockHeading(b, 4))
 	case lark.DocxBlockTypeHeading5:
-		buf.WriteString("##### ")
-		buf.WriteString(p.ParseDocxBlockText(b.Heading5))
+		buf.WriteString(p.ParseDocxBlockHeading(b, 5))
 	case lark.DocxBlockTypeHeading6:
-		buf.WriteString("###### ")
-		buf.WriteString(p.ParseDocxBlockText(b.Heading6))
+		buf.WriteString(p.ParseDocxBlockHeading(b, 6))
 	case lark.DocxBlockTypeHeading7:
-		buf.WriteString("####### ")
-		buf.WriteString(p.ParseDocxBlockText(b.Heading7))
+		buf.WriteString(p.ParseDocxBlockHeading(b, 7))
 	case lark.DocxBlockTypeHeading8:
-		buf.WriteString("######## ")
-		buf.WriteString(p.ParseDocxBlockText(b.Heading8))
+		buf.WriteString(p.ParseDocxBlockHeading(b, 8))
 	case lark.DocxBlockTypeHeading9:
-		buf.WriteString("######### ")
-		buf.WriteString(p.ParseDocxBlockText(b.Heading9))
+		buf.WriteString(p.ParseDocxBlockHeading(b, 9))
 	case lark.DocxBlockTypeBullet:
 		buf.WriteString(p.ParseDocxBlockBullet(b, indentLevel))
 	case lark.DocxBlockTypeOrdered:
@@ -192,6 +185,8 @@ func (p *Parser) ParseDocxBlock(b *lark.DocxBlock, indentLevel int) string {
 		buf.WriteString(p.ParseDocxBlockTable(b.Table))
 	case lark.DocxBlockTypeQuoteContainer:
 		buf.WriteString(p.ParseDocxBlockQuoteContainer(b))
+	case lark.DocxBlockTypeGrid:
+		buf.WriteString(p.ParseDocxBlockGrid(b, indentLevel))
 	default:
 	}
 	return buf.String()
@@ -224,6 +219,18 @@ func (p *Parser) ParseDocxBlockText(b *lark.DocxBlockText) string {
 	return buf.String()
 }
 
+func (p *Parser) ParseDocxBlockCallout(b *lark.DocxBlock) string {
+	buf := new(strings.Builder)
+
+	buf.WriteString(">[!TIP] \n")
+
+	for _, childId := range b.Children {
+		childBlock := p.blockMap[childId]
+		buf.WriteString(p.ParseDocxBlock(childBlock, 0))
+	}
+
+	return buf.String()
+}
 func (p *Parser) ParseDocxTextElement(e *lark.DocxTextElement, inline bool) string {
 	buf := new(strings.Builder)
 	if e.TextRun != nil {
@@ -250,12 +257,8 @@ func (p *Parser) ParseDocxTextElementTextRun(tr *lark.DocxTextElementTextRun) st
 	buf := new(strings.Builder)
 	postWrite := ""
 	if style := tr.TextElementStyle; style != nil {
-		useHTMLTags := NewConfig("", "").Output.UseHTMLTags
-		if p.ctx.Value("output") != nil {
-			useHTMLTags = p.ctx.Value("output").(OutputConfig).UseHTMLTags
-		}
 		if style.Bold {
-			if useHTMLTags {
+			if p.useHTMLTags {
 				buf.WriteString("<strong>")
 				postWrite = "</strong>"
 			} else {
@@ -263,7 +266,7 @@ func (p *Parser) ParseDocxTextElementTextRun(tr *lark.DocxTextElementTextRun) st
 				postWrite = "**"
 			}
 		} else if style.Italic {
-			if useHTMLTags {
+			if p.useHTMLTags {
 				buf.WriteString("<em>")
 				postWrite = "</em>"
 			} else {
@@ -271,7 +274,7 @@ func (p *Parser) ParseDocxTextElementTextRun(tr *lark.DocxTextElementTextRun) st
 				postWrite = "_"
 			}
 		} else if style.Strikethrough {
-			if useHTMLTags {
+			if p.useHTMLTags {
 				buf.WriteString("<del>")
 				postWrite = "</del>"
 			} else {
@@ -291,6 +294,23 @@ func (p *Parser) ParseDocxTextElementTextRun(tr *lark.DocxTextElementTextRun) st
 	}
 	buf.WriteString(tr.Content)
 	buf.WriteString(postWrite)
+	return buf.String()
+}
+
+func (p *Parser) ParseDocxBlockHeading(b *lark.DocxBlock, headingLevel int) string {
+	buf := new(strings.Builder)
+
+	buf.WriteString(strings.Repeat("#", headingLevel))
+	buf.WriteString(" ")
+
+	headingText := reflect.ValueOf(b).Elem().FieldByName(fmt.Sprintf("Heading%d", headingLevel))
+	buf.WriteString(p.ParseDocxBlockText(headingText.Interface().(*lark.DocxBlockText)))
+
+	for _, childId := range b.Children {
+		childBlock := p.blockMap[childId]
+		buf.WriteString(p.ParseDocxBlock(childBlock, 0))
+	}
+
 	return buf.String()
 }
 
@@ -358,30 +378,96 @@ func (p *Parser) ParseDocxBlockTableCell(b *lark.DocxBlock) string {
 	for _, child := range b.Children {
 		block := p.blockMap[child]
 		content := p.ParseDocxBlock(block, 0)
-		buf.WriteString(content)
+		buf.WriteString(content + "<br/>")
 	}
 
 	return buf.String()
 }
 
 func (p *Parser) ParseDocxBlockTable(t *lark.DocxBlockTable) string {
-	// - First row as header
-	// - Ignore cell merging
 	var rows [][]string
+	mergeInfoMap := map[int64]map[int64]*lark.DocxBlockTablePropertyMergeInfo{}
+
+	// 构建单元格合并信息的映射
+	if t.Property.MergeInfo != nil {
+		for i, merge := range t.Property.MergeInfo {
+			rowIndex := int64(i) / t.Property.ColumnSize
+			colIndex := int64(i) % t.Property.ColumnSize
+			if _, exists := mergeInfoMap[int64(rowIndex)]; !exists {
+				mergeInfoMap[int64(rowIndex)] = map[int64]*lark.DocxBlockTablePropertyMergeInfo{}
+			}
+			mergeInfoMap[rowIndex][colIndex] = merge
+		}
+	}
+
+	// 构建表格内容
+
 	for i, blockId := range t.Cells {
 		block := p.blockMap[blockId]
 		cellContent := p.ParseDocxBlock(block, 0)
 		cellContent = strings.ReplaceAll(cellContent, "\n", "")
 		rowIndex := int64(i) / t.Property.ColumnSize
-		if len(rows) < int(rowIndex)+1 {
+		colIndex := int64(i) % t.Property.ColumnSize
+
+		// 初始化行
+		for len(rows) <= int(rowIndex) {
 			rows = append(rows, []string{})
 		}
-		rows[rowIndex] = append(rows[rowIndex], cellContent)
+		for len(rows[rowIndex]) <= int(colIndex) {
+			rows[rowIndex] = append(rows[rowIndex], "")
+		}
+		// 设置单元格内容
+		rows[rowIndex][colIndex] = cellContent
 	}
 
+	// 渲染为 HTML 表格
 	buf := new(strings.Builder)
-	buf.WriteString(renderMarkdownTable(rows))
-	buf.WriteString("\n")
+	buf.WriteString("<table>\n")
+
+	// 跟踪已经处理过的合并单元格
+	processedCells := map[string]bool{}
+
+	// 构建 HTML 表格内容
+	for rowIndex, row := range rows {
+		buf.WriteString("<tr>\n")
+		for colIndex, cellContent := range row {
+			cellKey := fmt.Sprintf("%d-%d", rowIndex, colIndex)
+
+			// 跳过已处理的单元格
+			if processedCells[cellKey] {
+				continue
+			}
+
+			mergeInfo := mergeInfoMap[int64(rowIndex)][int64(colIndex)]
+			if mergeInfo != nil {
+
+				// 合并单元格，只有当 RowSpan > 1 或 ColSpan > 1 时才添加对应属性
+				attributes := ""
+				if mergeInfo.RowSpan > 1 {
+					attributes += fmt.Sprintf(` rowspan="%d"`, mergeInfo.RowSpan)
+				}
+				if mergeInfo.ColSpan > 1 {
+					attributes += fmt.Sprintf(` colspan="%d"`, mergeInfo.ColSpan)
+				}
+				buf.WriteString(fmt.Sprintf(
+					`<td%s>%s</td>`,
+					attributes, cellContent,
+				))
+				// 标记合并范围内的所有单元格为已处理
+				for r := rowIndex; r < rowIndex+int(mergeInfo.RowSpan); r++ {
+					for c := colIndex; c < colIndex+int(mergeInfo.ColSpan); c++ {
+						processedCells[fmt.Sprintf("%d-%d", r, c)] = true
+					}
+				}
+			} else {
+				// 普通单元格
+				buf.WriteString(fmt.Sprintf("<td>%s</td>", cellContent))
+			}
+		}
+		buf.WriteString("</tr>\n")
+	}
+	buf.WriteString("</table>\n")
+
 	return buf.String()
 }
 
@@ -392,6 +478,20 @@ func (p *Parser) ParseDocxBlockQuoteContainer(b *lark.DocxBlock) string {
 		block := p.blockMap[child]
 		buf.WriteString("> ")
 		buf.WriteString(p.ParseDocxBlock(block, 0))
+	}
+
+	return buf.String()
+}
+
+func (p *Parser) ParseDocxBlockGrid(b *lark.DocxBlock, indentLevel int) string {
+	buf := new(strings.Builder)
+
+	for _, child := range b.Children {
+		columnBlock := p.blockMap[child]
+		for _, child := range columnBlock.Children {
+			block := p.blockMap[child]
+			buf.WriteString(p.ParseDocxBlock(block, indentLevel))
+		}
 	}
 
 	return buf.String()

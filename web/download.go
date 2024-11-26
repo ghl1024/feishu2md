@@ -9,11 +9,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"regexp"
 	"strings"
 
 	"github.com/88250/lute"
 	"github.com/Wsine/feishu2md/core"
+	"github.com/Wsine/feishu2md/utils"
 	"github.com/gin-gonic/gin"
 )
 
@@ -25,30 +25,22 @@ func downloadHandler(c *gin.Context) {
 		return
 	}
 
-	// Validate the url
-	reg := regexp.MustCompile("^https://[a-zA-Z0-9-]+.(feishu.cn|larksuite.com)/(docs|docx|wiki)/([a-zA-Z0-9]+)")
-	matchResult := reg.FindStringSubmatch(feishu_docx_url)
-	if matchResult == nil || len(matchResult) != 4 {
-		c.String(http.StatusBadRequest, "Invalid feishu/larksuite URL pattern")
-		return
-	}
+	// Validate the url to download
+	docType, docToken, err := utils.ValidateDocumentURL(feishu_docx_url)
+	fmt.Println("Captured document token:", docToken)
 
+	// Create client with context
+	ctx := context.Background()
 	config := core.NewConfig(
 		os.Getenv("FEISHU_APP_ID"),
 		os.Getenv("FEISHU_APP_SECRET"),
 	)
-
-	domain := matchResult[1]
-	docType := matchResult[2]
-	docToken := matchResult[3]
-
-	ctx := context.Background()
-
 	client := core.NewClient(
-		config.Feishu.AppId, config.Feishu.AppSecret, domain,
+		config.Feishu.AppId, config.Feishu.AppSecret,
 	)
 
-	parser := core.NewParser(ctx)
+	// Process the download
+	parser := core.NewParser(config.Output)
 	markdown := ""
 
 	// for a wiki page, we need to renew docType and docToken first
@@ -61,6 +53,10 @@ func downloadHandler(c *gin.Context) {
 		}
 		docType = node.ObjType
 		docToken = node.ObjToken
+	}
+	if docType == "docs" {
+		c.String(http.StatusBadRequest, "Unsupported docs document type")
+		return
 	}
 
 	docx, blocks, err := client.GetDocxContent(ctx, docToken)

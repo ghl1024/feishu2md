@@ -2,7 +2,6 @@ package core
 
 import (
 	"encoding/json"
-	"io/ioutil"
 	"os"
 	"path"
 	"path/filepath"
@@ -50,16 +49,16 @@ func GetConfigFilePath() (string, error) {
 }
 
 func ReadConfigFromFile(configPath string) (*Config, error) {
-	file, err := ioutil.ReadFile(configPath)
+	file, err := os.ReadFile(configPath)
 	if err != nil {
 		return nil, err
 	}
-	config := Config{}
+	config := NewConfig("", "")
 	err = json.Unmarshal([]byte(file), &config)
 	if err != nil {
 		return nil, err
 	}
-	return &config, nil
+	return config, nil
 }
 
 func (conf *Config) WriteConfig2File(configPath string) error {
@@ -71,6 +70,6 @@ func (conf *Config) WriteConfig2File(configPath string) error {
 	if err != nil {
 		return err
 	}
-	err = ioutil.WriteFile(configPath, file, 0o644)
+	err = os.WriteFile(configPath, file, 0o644)
 	return err
 }
